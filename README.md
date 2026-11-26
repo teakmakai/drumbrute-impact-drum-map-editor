@@ -5,7 +5,7 @@ A faster, scale-aware replacement for the Drum Map page in Arturia MIDI Control 
 ## Usage
 
 1. Close MIDI Control Center, your DAW, and anything else using the Impact's MIDI port.
-2. Open `index.html` in Chrome or Edge. Opening the file directly works; so does a GitHub Pages link.
+2. Open https://teakmakai.github.io/drumbrute-impact-drum-map-editor/ in Chrome or Edge (or open `index.html` directly).
 3. Allow "MIDI devices with SysEx" when the browser asks.
 4. Pick the Impact as MIDI input and output, then press **Read from Impact**. A backup of the device values is saved automatically.
 5. Edit notes with the scale tools, table, or keyboard, then press **Send changes**.
@@ -13,6 +13,8 @@ A faster, scale-aware replacement for the Drum Map page in Arturia MIDI Control 
 ## Features
 
 - Root/scale selection with lock-to-scale and 18 scales
+- Automatic scale layout: choosing a root or scale puts the root on the Kick, the other pads on the next notes of the scale, and the color variants on the notes after that, so no two sounds share a note
+- Warning when two sounds share a note
 - Spread, randomize, reverse, transpose by scale step or octave
 - Color-variant notes, optionally following the main note
 - Live mode (sends each edit instantly) and verify-after-send
