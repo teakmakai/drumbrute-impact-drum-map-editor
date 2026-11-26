@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DrumBrute Impact — Drum Map Editor</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#14151a;--panel:#1d1f27;--panel2:#252833;--line:#33374a;--txt:#e6e8f0;--dim:#8a90a8;--acc:#ff8a3d;--acc2:#4cc9f0;--ok:#6bd38a;--bad:#ff5d6c;--chg:#f4d35e}
+*{box-sizing:border-box}
+body{margin:0 auto;background:var(--bg);color:var(--txt);font:14px/1.4 system-ui,Segoe UI,sans-serif;padding:16px;max-width:1200px}
+h1{font-size:20px;margin:0 0 2px}
+.sub{color:var(--dim);margin-bottom:14px;font-size:13px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+.panel h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:0 0 8px;font-weight:600}
+.grid{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:flex-end}
+label.f{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--dim)}
+label.chk{display:flex;gap:6px;align-items:center;font-size:13px}
+select,input[type=text]{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:5px 7px;font:inherit}
+button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:5px 10px;font:inherit;cursor:pointer}
+button:hover:not(:disabled){border-color:var(--acc)}
+button:disabled{opacity:.35;cursor:not-allowed}
+button.pri{background:var(--acc);color:#1a1006;border-color:var(--acc);font-weight:600}
+button.bad{border-color:var(--bad);color:var(--bad)}
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);text-align:left;padding:4px 6px;font-weight:600}
+td{padding:5px 6px;border-top:1px solid var(--line);white-space:nowrap}
+td.cell{cursor:pointer}
+td.cell.sel{background:#2f3346;box-shadow:inset 0 0 0 1px var(--acc)}
+.nn{display:inline-block;min-width:48px;text-align:center;font-weight:700;font-size:16px;color:var(--acc)}
+.nn.chg{color:var(--chg)}
+.nn.off{color:var(--bad)}
+.small{font-size:11px;color:var(--dim)}
+.stat{font-size:12px;padding:3px 8px;border-radius:99px;background:var(--panel2);display:inline-block}
+.stat.ok{color:var(--ok)}.stat.bad{color:var(--bad)}.stat.warn{color:var(--chg)}
+#kb{width:100%;height:auto;display:block;user-select:none}
+#kb rect{cursor:pointer}
+#log{font:12px ui-monospace,Consolas,monospace;color:var(--dim);max-height:140px;overflow:auto;white-space:pre-wrap}
+.warn{background:#2c2410;border:1px solid #6b5a1d;color:#f4d35e;border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:12px}
+</style>
+</head>
+<body>
+<h1>DrumBrute Impact — Drum Map Editor</h1>
+<div class="sub">A faster, scale-aware replacement for the Drum Map page in Arturia MIDI Control Center. Reads your Impact, lets you edit all pad notes, and writes them back to the DrumBrute itself.</div>
+
+<div class="warn"><b>Before you start:</b> close MIDI Control Center, FL Studio and anything else using MIDI (only one app can open the Impact's MIDI port). Use Chrome or Edge. The browser will ask permission for "MIDI devices with SysEx" — click Allow. This only ever writes the 19 drum-map note values; it backs up what's on the device before you send anything.</div>
+
+<div class="panel">
+  <h2>1 · Connect</h2>
+  <div class="grid">
+    <label class="f">MIDI input (DrumBrute Impact)<select id="inSel"></select></label>
+    <label class="f">MIDI output (DrumBrute Impact)<select id="outSel"></select></label>
+    <button id="connect" class="pri">Connect</button>
+    <button id="readBtn" disabled>Read from Impact</button>
+    <span id="stat" class="stat bad">Not connected</span>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>2 · Scale tools <span class="small">(edits stay local until you press Send)</span></h2>
+  <div class="grid">
+    <label class="f">Root<select id="root"></select></label>
+    <label class="f">Scale<select id="scale"></select></label>
+    <label class="chk"><input type="checkbox" id="lock"> Lock to scale</label>
+    <label class="chk"><input type="checkbox" id="follow"> Color note follows main note</label>
+  </div>
+  <div class="grid" style="margin-top:10px">
+    <label class="f">Spread starts on<select id="spreadBase"></select></label>
+    <label class="f">Spread style<select id="spreadStyle">
+      <option value="steps">Ascending scale steps</option>
+      <option value="triad">Triad tones (1-3-5-8…)</option>
+      <option value="fifths">Stacked 5ths of scale</option>
+    </select></label>
+    <button id="spread" class="pri">Spread across scale</button>
+    <button id="rand">Randomize</button>
+    <button id="rev">Reverse</button>
+    <button id="tUp">All +1 step</button><button id="tDn">All −1 step</button>
+    <button id="oUp">All +oct</button><button id="oDn">All −oct</button>
+    <button id="revert">Revert to device values</button>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>3 · Drum map</h2>
+  <div id="empty" class="small">Connect and press <b>Read from Impact</b> first.</div>
+  <table id="tbl" hidden>
+    <thead><tr><th>#</th><th>Instrument</th><th>Note</th><th></th><th>Color-variant note</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="small" style="margin-top:6px">Click a note cell, then click a key below. Yellow = changed but not sent yet. Note names match MIDI Control Center (note 0 = C-2, so 60 = C3).</div>
+</div>
+
+<div class="panel">
+  <h2>Keyboard <span class="small">orange = root · bright = in scale · dim = out of scale · numbers = instruments (purple = color variant)</span></h2>
+  <svg id="kb" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+
+<div class="panel">
+  <h2>4 · Send to Impact</h2>
+  <div class="grid">
+    <button id="send" class="pri" disabled>Send changes</button>
+    <label class="chk"><input type="checkbox" id="live"> Live mode (send each edit instantly, only the changed note — good during playback)</label>
+    <label class="chk"><input type="checkbox" id="verify"> Verify after send (reads values back; turn off while playing)</label>
+    <span id="pending" class="small"></span>
+  </div>
+  <div class="grid" style="margin-top:10px">
+    <label class="f">Device backups (auto-saved on every read)<select id="bakSel"></select></label>
+    <button id="bakLoad">Load backup into editor</button>
+    <button id="bakDl">Download backup file</button>
+  </div>
+  <div class="grid" style="margin-top:10px">
+    <label class="f">Presets<select id="presetSel"></select></label>
+    <button id="pLoad">Load</button><button id="pSave">Save as…</button><button id="pDel" class="bad">Delete</button>
+    <button id="pExp">Export file</button><button id="pImp">Import file</button><input type="file" id="pFile" accept=".json" hidden>
+  </div>
+</div>
+
+<div class="panel"><h2>Log</h2><div id="log"></div></div>
+
+<script>
+'use strict';
+const NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const noteName=n=>NAMES[((n%12)+12)%12]+(Math.floor(n/12)-2);   // MCC naming: 0 = C-2, 60 = C3
+const SCALES={
+ 'Chromatic':[0,1,2,3,4,5,6,7,8,9,10,11],'Major (Ionian)':[0,2,4,5,7,9,11],'Minor (Aeolian)':[0,2,3,5,7,8,10],
+ 'Dorian':[0,2,3,5,7,9,10],'Phrygian':[0,1,3,5,7,8,10],'Lydian':[0,2,4,6,7,9,11],'Mixolydian':[0,2,4,5,7,9,10],
+ 'Locrian':[0,1,3,5,6,8,10],'Harmonic minor':[0,2,3,5,7,8,11],'Melodic minor':[0,2,3,5,7,9,11],
+ 'Phrygian dominant':[0,1,4,5,7,8,10],'Major pentatonic':[0,2,4,7,9],'Minor pentatonic':[0,3,5,7,10],'Blues':[0,3,5,6,7,10],
+ 'Whole tone':[0,2,4,6,8,10],'Diminished (W-H)':[0,2,3,5,6,8,9,11],'Hirajoshi':[0,2,3,7,8],'Insen':[0,1,5,7,10]
+};
+// Control IDs from the open-source sysex-controls project (DrumBrute Impact "Drum Map" page)
+const INSTR=[
+ {name:'Kick',   plain:0x4130,color:0x413a},
+ {name:'Snare 1',plain:0x4131,color:0x413b},
+ {name:'Snare 2',plain:0x4132,color:0x413c},
+ {name:'Tom H',  plain:0x4133,color:0x413d},
+ {name:'Tom L',  plain:0x4134,color:0x413e},
+ {name:'Cymbal', plain:0x4135,color:0x413f},
+ {name:'Cowbell',plain:0x4136,color:null},
+ {name:'Cl Hat', plain:0x4137,color:0x4140},
+ {name:'Op Hat', plain:0x4138,color:0x4141},
+ {name:'FM',     plain:0x4139,color:0x4142}
+];
+const ALLOWED=new Set(); INSTR.forEach(i=>{ALLOWED.add(i.plain); if(i.color) ALLOWED.add(i.color);});
+const LO=24, HI=96;
+const SKEY='impact-editor-settings-v1', PKEY='impact-editor-presets-v1', BKEY='impact-editor-backups-v1';
+const $=id=>document.getElementById(id);
+
+let cfg={root:0,scale:'Minor (Aeolian)',lock:true,follow:false,live:false,verify:true,spreadBase:36,spreadStyle:'steps',inPort:'',outPort:''};
+try{Object.assign(cfg,JSON.parse(localStorage.getItem(SKEY))||{});}catch(e){}
+const saveCfg=()=>{try{localStorage.setItem(SKEY,JSON.stringify(cfg));}catch(e){}};
+
+let dev=null, cur=null;      // dev: values read from device {id:val}; cur: edited values
+let sel={i:0,w:'plain'};
+let access=null, inP=null, outP=null, busy=false;
+const pending=new Map();
+
+/* ---------- log ---------- */
+const hex=m=>[...m].map(b=>b.toString(16).padStart(2,'0')).join(' ');
+function log(t){const l=$('log'); l.textContent+=t+'\n'; l.scrollTop=l.scrollHeight;}
+function setStat(t,cls){const e=$('stat'); e.textContent=t; e.className='stat '+cls;}
+
+/* ---------- scale helpers ---------- */
+const ivs=()=>SCALES[cfg.scale]||SCALES.Chromatic;
+const inScale=n=>ivs().includes((((n-cfg.root)%12)+12)%12);
+const locked=()=>cfg.lock && cfg.scale!=='Chromatic';
+function snap(n){ n=Math.max(LO,Math.min(HI,n)); if(!locked()||inScale(n)) return n;
+  for(let d=1;d<12;d++){ if(n+d<=HI&&inScale(n+d)) return n+d; if(n-d>=LO&&inScale(n-d)) return n-d; } return n; }
+function step(n,dir){ let m=n; for(let i=0;i<24;i++){ m+=dir; if(m<LO||m>HI) return n; if(!locked()||inScale(m)) return m; } return n; }
+function pool(from,count){ const o=[]; let n=snap(from); while(o.length<count&&n<=HI){o.push(n); const x=step(n,1); if(x===n)break; n=x;} return o; }
+
+/* ---------- MIDI / SysEx (protocol from sysex-controls: F0 00 20 6B 7F 42 <01 read|02 write> 00 <id hi> <id lo> [val] F7) ---------- */
+const HDR=[0xF0,0x00,0x20,0x6B,0x7F,0x42];
+function idBytes(id){ return [(id>>16)&0x7f,(id>>8)&0x7f,id&0x7f]; }
+function sendRaw(b){ if(!outP) throw new Error('No output'); outP.send(b); }
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+function onMsg(e){
+  const d=e.data;
+  if(d.length===12 && HDR.every((v,i)=>d[i]===v) && d[6]===0x02 && d[11]===0xF7){
+    const id=(d[7]<<16)|(d[8]<<8)|d[9], val=d[10];
+    const p=pending.get(id); if(p){ pending.delete(id); p(val); }
+  } else if(d[0]===0xF0 && d[1]===0x7E && d[3]===0x06 && d[4]===0x02){
+    log('Device inquiry reply: '+hex(d));
+    const p=pending.get('inq'); if(p){ pending.delete('inq'); p(d); }
+  }
+}
+function waitFor(key,ms){ return new Promise((res,rej)=>{ const t=setTimeout(()=>{pending.delete(key); rej(new Error('timeout'));},ms); pending.set(key,v=>{clearTimeout(t);res(v);}); }); }
+async function readControl(id){
+  if(!ALLOWED.has(id)) throw new Error('blocked id');
+  for(let attempt=0;attempt<3;attempt++){
+    const w=waitFor(id,700); sendRaw([...HDR,0x01,...idBytes(id),0xF7]);
+    try{ return await w; }catch(e){ if(attempt===2) throw e; }
+  }
+}
+async function writeControl(id,val){
+  if(!ALLOWED.has(id)) throw new Error('blocked id 0x'+id.toString(16));
+  if(!Number.isInteger(val)||val<0||val>127) throw new Error('bad value '+val);
+  sendRaw([...HDR,0x02,...idBytes(id),val,0xF7]);
+}
+
+async function connect(){
+  if(!navigator.requestMIDIAccess){ setStat('Web MIDI not supported — use Chrome or Edge','bad'); return; }
+  try{ access=await navigator.requestMIDIAccess({sysex:true}); }
+  catch(e){ const framed=(window.top!==window);
+    setStat('MIDI/SysEx blocked ['+e.name+']'+(framed?' — open the file directly in Chrome/Edge':' — allow "MIDI devices with SysEx" in the site settings (icon left of the address bar), then reload'),'bad'); return; }
+  access.onstatechange=refreshPorts; refreshPorts();
+}
+function fill(sel,ports,want,pref){
+  sel.innerHTML='<option value="">— none —</option>'+ports.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  const pick=ports.find(p=>p.name===want)||ports.find(p=>pref.test(p.name)); sel.value=pick?pick.id:'';
+}
+function refreshPorts(){
+  fill($('inSel'),[...access.inputs.values()],cfg.inPort,/impact/i);
+  fill($('outSel'),[...access.outputs.values()],cfg.outPort,/impact/i);
+  bind();
+}
+function bind(){
+  if(inP) inP.onmidimessage=null;
+  inP=access.inputs.get($('inSel').value)||null; outP=access.outputs.get($('outSel').value)||null;
+  if(inP) inP.onmidimessage=onMsg;
+  cfg.inPort=inP?inP.name:''; cfg.outPort=outP?outP.name:''; saveCfg();
+  const ok=!!(inP&&outP);
+  $('readBtn').disabled=!ok;
+  setStat(ok?'Ports ready — press Read from Impact':'Pick the Impact as input and output', ok?'warn':'bad');
+}
+
+async function readAll(){
+  if(busy) return; busy=true; $('readBtn').disabled=true;
+  try{
+    setStat('Reading…','warn');
+    try{ const w=waitFor('inq',800); sendRaw([0xF0,0x7E,0x7F,0x06,0x01,0xF7]); const r=await w;
+      if(!(r[5]===0x00&&r[6]===0x20&&r[7]===0x6B)) throw new Error('not Arturia'); }
+    catch(e){ log('Device inquiry: no Arturia reply ('+e.message+') — trying a direct read anyway'); }
+    const vals={}; const ids=[...ALLOWED];
+    for(const id of ids){ vals[id]=await readControl(id); setStat('Reading '+Object.keys(vals).length+'/'+ids.length,'warn'); await sleep(8); }
+    dev={...vals}; cur={...vals};
+    addBackup(vals);
+    log('Read OK: '+ids.map(i=>noteName(vals[i])).join(' '));
+    setStat('Connected · read '+ids.length+' values · backup saved','ok');
+  }catch(e){
+    setStat('No reply from the Impact ('+e.message+'). Close MCC/FL Studio, check the ports are the Impact, then retry.','bad');
+    log('Read failed: '+e.message);
+  }finally{ busy=false; $('readBtn').disabled=!(inP&&outP); render(); }
+}
+
+async function sendChanges(){
+  if(busy||!dev) return;
+  const changed=[...ALLOWED].filter(id=>cur[id]!==dev[id]);
+  if(!changed.length) return;
+  if(!confirm('Send '+changed.length+' changed note value(s) to the DrumBrute Impact?\n\nA backup of the current device values is already saved.')) return;
+  busy=true; $('send').disabled=true;
+  try{
+    setStat('Writing…','warn');
+    for(const id of changed){ await writeControl(id,cur[id]); await sleep(25); }
+    if(!cfg.verify){ changed.forEach(id=>dev[id]=cur[id]); setStat('Sent '+changed.length+' value(s) (not verified)','ok'); log('Wrote '+changed.length+' controls, no read-back'); return; }
+    await sleep(100);
+    const bad=[];
+    for(const id of changed){ const v=await readControl(id); if(v!==cur[id]) bad.push(id); else dev[id]=v; await sleep(8); }
+    if(bad.length){ setStat(bad.length+' value(s) did not stick — see log','bad'); log('Mismatch on: '+bad.map(i=>'0x'+i.toString(16)).join(', ')); }
+    else { setStat('Sent & verified '+changed.length+' value(s)','ok'); log('Wrote & verified '+changed.length+' controls'); }
+  }catch(e){ setStat('Write failed: '+e.message,'bad'); log('Write failed: '+e.message); }
+  finally{ busy=false; render(); }
+}
+
+/* ---------- live mode: send only changed notes, no read-back, no extra traffic ---------- */
+let flushT=null;
+function scheduleFlush(){ clearTimeout(flushT); flushT=setTimeout(flushLive,120); }
+async function flushLive(){
+  if(busy||!cur||!outP) return;
+  const ch=[...ALLOWED].filter(id=>cur[id]!==dev[id]); if(!ch.length) return;
+  busy=true;
+  try{ for(const id of ch){ await writeControl(id,cur[id]); dev[id]=cur[id]; await sleep(5); }
+    setStat('Live: sent '+ch.length+' note(s)','ok'); log('Live sent '+ch.map(i=>'0x'+i.toString(16)+'='+cur[i]).join(' ')); }
+  catch(e){ setStat('Live send failed: '+e.message,'bad'); }
+  finally{ busy=false; render(); }
+}
+
+/* ---------- backups & presets ---------- */
+const jget=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))||d;}catch(e){return d;}};
+function addBackup(vals){ const b=jget(BKEY,[]); b.unshift({t:new Date().toISOString(),vals}); localStorage.setItem(BKEY,JSON.stringify(b.slice(0,15))); fillBackups(); }
+function fillBackups(){ const b=jget(BKEY,[]); $('bakSel').innerHTML=b.map((x,i)=>`<option value="${i}">${new Date(x.t).toLocaleString()}</option>`).join('')||'<option value="">(none yet)</option>'; }
+function fillPresets(){ const p=jget(PKEY,{}); $('presetSel').innerHTML=Object.keys(p).map(k=>`<option>${k}</option>`).join('')||'<option value="">(none saved)</option>'; }
+
+/* ---------- editing ---------- */
+const ready=()=>!!cur;
+function idOf(i,w){ return INSTR[i][w]; }
+function setNote(i,w,n){ const id=idOf(i,w); if(id==null) return; cur[id]=n;
+  if(w==='plain'&&cfg.follow&&INSTR[i].color) cur[INSTR[i].color]=n; }
+function eachPlain(fn){ INSTR.forEach((x,i)=>fn(i,x)); }
+function render(){
+  $('root').value=cfg.root; $('scale').value=cfg.scale; $('lock').checked=cfg.lock; $('follow').checked=cfg.follow; $('live').checked=cfg.live; $('verify').checked=cfg.verify;
+  $('spreadBase').value=cfg.spreadBase; $('spreadStyle').value=cfg.spreadStyle;
+  $('empty').hidden=ready(); $('tbl').hidden=!ready();
+  const nChg=ready()?[...ALLOWED].filter(id=>cur[id]!==dev[id]).length:0;
+  $('send').disabled=!(ready()&&nChg>0&&!busy);
+  $('pending').textContent=ready()?(nChg?nChg+' change(s) not sent yet':'No unsent changes'):'';
+  if(ready()){
+    const cell=(i,w)=>{ const id=idOf(i,w); if(id==null) return '<td class="small">—</td><td></td>';
+      const v=cur[id], chg=v!==dev[id], off=locked()&&!inScale(v);
+      const isSel=sel.i===i&&sel.w===w;
+      return `<td class="cell ${isSel?'sel':''}" data-i="${i}" data-w="${w}"><span class="nn ${chg?'chg':''} ${off?'off':''}">${noteName(v)}</span> <span class="small">${v}</span></td>
+        <td><button data-a="dn" data-i="${i}" data-w="${w}">▼</button><button data-a="up" data-i="${i}" data-w="${w}">▲</button><button data-a="odn" data-i="${i}" data-w="${w}">−12</button><button data-a="oup" data-i="${i}" data-w="${w}">+12</button></td>`; };
+    $('rows').innerHTML=INSTR.map((x,i)=>`<tr><td class="small">${i+1}</td><td>${x.name}</td>${cell(i,'plain')}${cell(i,'color')}</tr>`).join('');
+  }
+  drawKB(); try{localStorage.setItem(SKEY,JSON.stringify(cfg));}catch(e){}
+  if(cfg.live&&ready()&&!busy) scheduleFlush();
+}
+function drawKB(){
+  const W=14,H=110,BH=68,BW=9, whites=[]; for(let n=LO;n<=HI;n++) if(![1,3,6,8,10].includes(n%12)) whites.push(n);
+  const xOf=n=>whites.indexOf(n)*W, total=whites.length*W; let out='';
+  const col=(n,b)=> (locked()&&!inScale(n))?(b?'#15161c':'#3a3d4a'):(((n-cfg.root)%12+12)%12===0?'#ff8a3d':(b?'#6a7090':'#e6e8f0'));
+  whites.forEach(n=>{ out+=`<rect data-n="${n}" x="${xOf(n)}" y="0" width="${W-1}" height="${H}" rx="2" fill="${col(n,false)}"/>`;
+    if(n%12===0) out+=`<text x="${xOf(n)+2}" y="${H-4}" font-size="8" fill="#14151a" pointer-events="none">${noteName(n)}</text>`; });
+  for(let n=LO;n<=HI;n++) if([1,3,6,8,10].includes(n%12)){ const x=xOf(n-1)+W-BW/2-.5; out+=`<rect data-n="${n}" x="${x}" y="0" width="${BW}" height="${BH}" rx="2" fill="${col(n,true)}"/>`; }
+  if(ready()){
+    const stack={};
+    INSTR.forEach((x,i)=>['plain','color'].forEach(w=>{ const id=x[w]; if(id==null) return; const n=cur[id]; if(n<LO||n>HI) return;
+      const black=[1,3,6,8,10].includes(n%12), cx=black?xOf(n-1)+W-.5:xOf(n)+(W-1)/2, k=stack[n]=(stack[n]||0)+1;
+      const cy=(black?BH-12:H-26)-(k-1)*13, isSel=sel.i===i&&sel.w===w;
+      const fill=isSel?'#4cc9f0':(w==='plain'?'#ff5d6c':'#b48cff');
+      out+=`<circle cx="${cx}" cy="${cy}" r="6" fill="${fill}" pointer-events="none"/><text x="${cx}" y="${cy+3}" font-size="8" text-anchor="middle" fill="#0b0b10" font-weight="700" pointer-events="none">${i+1}</text>`; }));
+  }
+  const kb=$('kb'); kb.setAttribute('viewBox',`0 0 ${total} ${H}`); kb.innerHTML=out;
+}
+function applyLock(){ if(!ready()) return; [...ALLOWED].forEach(id=>cur[id]=snap(cur[id])); }
+
+function init(){
+  $('root').innerHTML=NAMES.map((n,i)=>`<option value="${i}">${n}</option>`).join('');
+  $('scale').innerHTML=Object.keys(SCALES).map(k=>`<option>${k}</option>`).join('');
+  $('spreadBase').innerHTML=[...Array(HI-LO+1).keys()].map(i=>`<option value="${LO+i}">${noteName(LO+i)}</option>`).join('');
+  [['root',1],['scale',0],['lock',0],['follow',0],['verify',0],['spreadBase',1],['spreadStyle',0]].forEach(([k,num])=>$(k).addEventListener('change',e=>{
+    const el=e.target; let v=el.type==='checkbox'?el.checked:el.value; if(num) v=+v; cfg[k]=v;
+    if(['root','scale','lock'].includes(k)) applyLock(); render(); }));
+  $('live').addEventListener('change',e=>{
+    if(e.target.checked&&ready()&&[...ALLOWED].some(id=>cur[id]!==dev[id])&&!confirm('Unsent changes will be sent to the Impact right now. Continue?')){ e.target.checked=false; return; }
+    cfg.live=e.target.checked; render(); });
+  $('connect').onclick=connect; $('readBtn').onclick=readAll; $('send').onclick=sendChanges;
+  $('inSel').onchange=bind; $('outSel').onchange=bind;
+
+  $('rows').addEventListener('click',e=>{
+    const b=e.target.closest('button'), td=e.target.closest('td.cell'), src=b||td; if(!src||!ready()) return;
+    const i=+src.dataset.i, w=src.dataset.w; sel={i,w};
+    if(b){ const id=idOf(i,w), v=cur[id], a=b.dataset.a;
+      let n=v; if(a==='up') n=step(v,1); if(a==='dn') n=step(v,-1); if(a==='oup') n=snap(v+12); if(a==='odn') n=snap(v-12);
+      setNote(i,w,n); }
+    render(); });
+  $('kb').addEventListener('click',e=>{ const n=e.target.dataset&&e.target.dataset.n; if(!n||!ready()) return; setNote(sel.i,sel.w,snap(+n)); render(); });
+
+  const all=fn=>()=>{ if(!ready()) return; fn(); render(); };
+  $('spread').onclick=all(()=>{ const p=pool(cfg.spreadBase,40), st=cfg.spreadStyle;
+    eachPlain(i=>{ const n=st==='steps'?p[i]:st==='triad'?p[i*2]:p[(i*4)%p.length]; if(n!==undefined) setNote(i,'plain',snap(n)); }); });
+  $('rand').onclick=all(()=>{ const p=pool(cfg.spreadBase,24); eachPlain(i=>setNote(i,'plain',p[Math.floor(Math.random()*p.length)])); });
+  $('rev').onclick=all(()=>{ const v=INSTR.map(x=>cur[x.plain]).reverse(); eachPlain(i=>setNote(i,'plain',v[i])); });
+  const shift=f=>()=>{ [...ALLOWED].forEach(id=>cur[id]=f(cur[id])); };
+  $('tUp').onclick=all(shift(n=>step(n,1))); $('tDn').onclick=all(shift(n=>step(n,-1)));
+  $('oUp').onclick=all(shift(n=>snap(n+12)));  $('oDn').onclick=all(shift(n=>snap(n-12)));
+  $('revert').onclick=all(()=>{ cur={...dev}; });
+
+  $('bakLoad').onclick=()=>{ if(!dev){ alert('Read from the Impact first.'); return; } const b=jget(BKEY,[])[+$('bakSel').value]; if(!b) return; cur={...dev,...b.vals}; log('Loaded backup '+b.t+' into editor (not sent yet)'); render(); };
+  $('bakDl').onclick=()=>{ const b=jget(BKEY,[])[+$('bakSel').value]; if(!b) return; dl('impact-backup-'+b.t.replace(/[:.]/g,'-')+'.json',b); };
+  const dl=(name,obj)=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([JSON.stringify(obj,null,2)],{type:'application/json'})); a.download=name; a.click(); };
+  const snapshot=()=>({cfg:{root:cfg.root,scale:cfg.scale,lock:cfg.lock,follow:cfg.follow},vals:cur});
+  const loadSnap=s=>{ if(!dev){ alert('Read from the Impact first.'); return; } Object.assign(cfg,s.cfg||{}); cur={...dev}; Object.keys(s.vals||{}).forEach(k=>{ if(ALLOWED.has(+k)) cur[+k]=Math.max(0,Math.min(127,s.vals[k]|0)); }); render(); };
+  $('pSave').onclick=()=>{ if(!ready()) return; const name=prompt('Preset name?'); if(!name) return; const p=jget(PKEY,{}); p[name]=snapshot(); localStorage.setItem(PKEY,JSON.stringify(p)); fillPresets(); $('presetSel').value=name; };
+  $('pLoad').onclick=()=>{ const s=jget(PKEY,{})[$('presetSel').value]; if(s) loadSnap(s); };
+  $('pDel').onclick=()=>{ const p=jget(PKEY,{}); delete p[$('presetSel').value]; localStorage.setItem(PKEY,JSON.stringify(p)); fillPresets(); };
+  $('pExp').onclick=()=>{ if(ready()) dl('impact-drum-map-preset.json',snapshot()); };
+  $('pImp').onclick=()=>$('pFile').click();
+  $('pFile').onchange=e=>{ const f=e.target.files[0]; if(!f) return; f.text().then(t=>{ try{ const j=JSON.parse(t); loadSnap(j.vals?j:{vals:j.vals}); }catch(err){ alert('Not a valid preset file.'); } }); };
+
+  fillBackups(); fillPresets(); render(); connect();
+}
+init();
+</script>
+</body>
+</html>
