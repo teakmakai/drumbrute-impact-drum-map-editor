@@ -17,7 +17,9 @@ A faster, scale-aware replacement for the Drum Map page in Arturia MIDI Control 
 - Warning when two sounds share a note
 - Spread, randomize, reverse, transpose by scale step or octave
 - Color-variant notes, optionally following the main note
-- Live mode (sends each edit instantly) and verify-after-send
+- Mute button for each send (moves it to a spare note you choose, since the Impact can't switch a pad's MIDI output off)
+- Live mode that only sends the notes that changed, optionally landing key changes on the next beat or bar using the Impact's MIDI clock
+- Verify-after-send
 - Automatic device backups, plus presets saved locally or exported as JSON
 
 Only the 19 drum-map note values are ever written. The SysEx control IDs come from the open-source sysex-controls project.

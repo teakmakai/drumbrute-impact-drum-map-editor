@@ -29,6 +29,9 @@ td.cell.sel{background:#2f3346;box-shadow:inset 0 0 0 1px var(--acc)}
 .nn{display:inline-block;min-width:48px;text-align:center;font-weight:700;font-size:16px;color:var(--acc)}
 .nn.chg{color:var(--chg)}
 .nn.off{color:var(--bad)}
+.nn.mut{opacity:.35;text-decoration:line-through}
+button.mute{margin-left:6px;font-weight:700}
+button.mute.on{background:var(--bad);color:#1a0508;border-color:var(--bad)}
 .nn.dup{text-decoration:underline wavy var(--bad);text-underline-offset:4px}
 .small{font-size:11px;color:var(--dim)}
 .stat{font-size:12px;padding:3px 8px;border-radius:99px;background:var(--panel2);display:inline-block}
@@ -100,10 +103,20 @@ td.cell.sel{background:#2f3346;box-shadow:inset 0 0 0 1px var(--acc)}
   <h2>4 · Send to Impact</h2>
   <div class="grid">
     <button id="send" class="pri" disabled>Send changes</button>
-    <label class="chk"><input type="checkbox" id="live"> Live mode (send each edit instantly, only the changed note — good during playback)</label>
+    <label class="chk"><input type="checkbox" id="live"> Live mode (sends edits straight away, only the notes that changed, so it's safe during playback)</label>
     <label class="chk"><input type="checkbox" id="verify"> Verify after send (reads values back; turn off while playing)</label>
     <span id="pending" class="small"></span>
   </div>
+  <div class="grid" style="margin-top:10px">
+    <label class="f">Live changes land on<select id="liveQ">
+      <option value="now">Immediately</option>
+      <option value="beat">Next beat</option>
+      <option value="bar">Next bar</option>
+    </select></label>
+    <label class="f">Muted sends are parked on<select id="muteNote"></select></label>
+    <span id="clk" class="small">Impact clock: not seen</span>
+  </div>
+  <div class="small" style="margin-top:6px">"Next beat / bar" follows the MIDI clock the Impact sends while it plays (4/4) and writes the new notes just before the beat or bar, so a key change lands cleanly on the downbeat. With no clock coming in, changes go out immediately. The Impact can't switch a pad's MIDI output off, so <b>M</b> (mute) moves that send to the note chosen above. Pick a note nothing in your DAW or synth responds to (C-2 is usually safe), and unmuting puts the real note back.</div>
   <div class="grid" style="margin-top:10px">
     <label class="f">Device backups (auto-saved on every read)<select id="bakSel"></select></label>
     <button id="bakLoad">Load backup into editor</button>
@@ -147,7 +160,7 @@ const LO=24, HI=96;
 const SKEY='impact-editor-settings-v1', PKEY='impact-editor-presets-v1', BKEY='impact-editor-backups-v1';
 const $=id=>document.getElementById(id);
 
-let cfg={root:0,scale:'Minor (Aeolian)',lock:true,follow:false,live:false,verify:true,spreadBase:36,spreadStyle:'map',inPort:'',outPort:''};
+let cfg={root:0,scale:'Minor (Aeolian)',lock:true,follow:false,live:false,verify:true,spreadBase:36,spreadStyle:'map',liveQ:'bar',muteNote:0,inPort:'',outPort:''};
 try{Object.assign(cfg,JSON.parse(localStorage.getItem(SKEY))||{});}catch(e){}
 const saveCfg=()=>{try{localStorage.setItem(SKEY,JSON.stringify(cfg));}catch(e){}};
 
@@ -155,6 +168,9 @@ let dev=null, cur=null;      // dev: values read from device {id:val}; cur: edit
 let sel={i:0,w:'plain'};
 let access=null, inP=null, outP=null, busy=false;
 const pending=new Map();
+const muted=new Set();                                   // ids whose send is parked on cfg.muteNote
+const out=id=>muted.has(id)?cfg.muteNote:cur[id];        // the value the device should hold
+const changedIds=()=>[...ALLOWED].filter(id=>out(id)!==dev[id]);
 
 /* ---------- log ---------- */
 const hex=m=>[...m].map(b=>b.toString(16).padStart(2,'0')).join(' ');
@@ -173,11 +189,12 @@ function pool(from,count){ const o=[]; let n=snap(from); while(o.length<count&&n
 /* ---------- MIDI / SysEx (protocol from sysex-controls: F0 00 20 6B 7F 42 <01 read|02 write> 00 <id hi> <id lo> [val] F7) ---------- */
 const HDR=[0xF0,0x00,0x20,0x6B,0x7F,0x42];
 function idBytes(id){ return [(id>>16)&0x7f,(id>>8)&0x7f,id&0x7f]; }
-function sendRaw(b){ if(!outP) throw new Error('No output'); outP.send(b); }
+function sendRaw(b,t){ if(!outP) throw new Error('No output'); t===undefined?outP.send(b):outP.send(b,t); }
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
 function onMsg(e){
   const d=e.data;
+  if(d[0]>=0xF8||d[0]===0xF2){ onClock(d); return; }
   if(d.length===12 && HDR.every((v,i)=>d[i]===v) && d[6]===0x02 && d[11]===0xF7){
     const id=(d[7]<<16)|(d[8]<<8)|d[9], val=d[10];
     const p=pending.get(id); if(p){ pending.delete(id); p(val); }
@@ -194,10 +211,10 @@ async function readControl(id){
     try{ return await w; }catch(e){ if(attempt===2) throw e; }
   }
 }
-async function writeControl(id,val){
+function writeControl(id,val,t){
   if(!ALLOWED.has(id)) throw new Error('blocked id 0x'+id.toString(16));
   if(!Number.isInteger(val)||val<0||val>127) throw new Error('bad value '+val);
-  sendRaw([...HDR,0x02,...idBytes(id),val,0xF7]);
+  sendRaw([...HDR,0x02,...idBytes(id),val,0xF7],t);
 }
 
 async function connect(){
@@ -235,7 +252,7 @@ async function readAll(){
     catch(e){ log('Device inquiry: no Arturia reply ('+e.message+') — trying a direct read anyway'); }
     const vals={}; const ids=[...ALLOWED];
     for(const id of ids){ vals[id]=await readControl(id); setStat('Reading '+Object.keys(vals).length+'/'+ids.length,'warn'); await sleep(8); }
-    dev={...vals}; cur={...vals};
+    dev={...vals}; cur={...vals}; muted.clear();
     addBackup(vals);
     log('Read OK: '+ids.map(i=>noteName(vals[i])).join(' '));
     setStat('Connected · read '+ids.length+' values · backup saved','ok');
@@ -247,35 +264,61 @@ async function readAll(){
 
 async function sendChanges(){
   if(busy||!dev) return;
-  const changed=[...ALLOWED].filter(id=>cur[id]!==dev[id]);
+  const changed=changedIds();
   if(!changed.length) return;
   if(!confirm('Send '+changed.length+' changed note value(s) to the DrumBrute Impact?\n\nA backup of the current device values is already saved.')) return;
   busy=true; $('send').disabled=true;
   try{
     setStat('Writing…','warn');
-    for(const id of changed){ await writeControl(id,cur[id]); await sleep(25); }
-    if(!cfg.verify){ changed.forEach(id=>dev[id]=cur[id]); setStat('Sent '+changed.length+' value(s) (not verified)','ok'); log('Wrote '+changed.length+' controls, no read-back'); return; }
+    for(const id of changed){ writeControl(id,out(id)); await sleep(25); }
+    if(!cfg.verify){ changed.forEach(id=>dev[id]=out(id)); setStat('Sent '+changed.length+' value(s) (not verified)','ok'); log('Wrote '+changed.length+' controls, no read-back'); return; }
     await sleep(100);
     const bad=[];
-    for(const id of changed){ const v=await readControl(id); if(v!==cur[id]) bad.push(id); else dev[id]=v; await sleep(8); }
+    for(const id of changed){ const v=await readControl(id); if(v!==out(id)) bad.push(id); else dev[id]=v; await sleep(8); }
     if(bad.length){ setStat(bad.length+' value(s) did not stick — see log','bad'); log('Mismatch on: '+bad.map(i=>'0x'+i.toString(16)).join(', ')); }
     else { setStat('Sent & verified '+changed.length+' value(s)','ok'); log('Wrote & verified '+changed.length+' controls'); }
   }catch(e){ setStat('Write failed: '+e.message,'bad'); log('Write failed: '+e.message); }
   finally{ busy=false; render(); }
 }
 
-/* ---------- live mode: send only changed notes, no read-back, no extra traffic ---------- */
-let flushT=null;
-function scheduleFlush(){ clearTimeout(flushT); flushT=setTimeout(flushLive,120); }
-async function flushLive(){
-  if(busy||!cur||!outP) return;
-  const ch=[...ALLOWED].filter(id=>cur[id]!==dev[id]); if(!ch.length) return;
-  busy=true;
-  try{ for(const id of ch){ await writeControl(id,cur[id]); dev[id]=cur[id]; await sleep(5); }
-    setStat('Live: sent '+ch.length+' note(s)','ok'); log('Live sent '+ch.map(i=>'0x'+i.toString(16)+'='+cur[i]).join(' ')); }
-  catch(e){ setStat('Live send failed: '+e.message,'bad'); }
-  finally{ busy=false; render(); }
+/* ---------- live mode ----------
+   Only changed values are sent, never read back. Writes are handed to the browser with timestamps
+   1.5 ms apart (no setTimeout jitter, no awaiting), Kick first. With quantize on and the Impact's
+   clock running, a change is armed and fired LEAD ticks before the next beat/bar. */
+const LEAD=2, GAP=1.5;
+const clk={tick:-1,pos:false,seen:0,ivl:0};   // tick = 24ppqn count since Start; pos = bar position known
+let flushT=null, armed=false;
+function onClock(d){
+  const t=performance.now();
+  if(d[0]===0xF8){ if(clk.seen&&t-clk.seen<200) clk.ivl=clk.ivl?clk.ivl*.9+(t-clk.seen)*.1:t-clk.seen; clk.seen=t; clk.tick++;
+    if(armed&&clk.pos){ const per=cfg.liveQ==='bar'?96:24; if(((clk.tick+LEAD)%per+per)%per===0) liveSend(); } }
+  else if(d[0]===0xFA){ clk.tick=-1; clk.pos=true; }           // Start: next tick is the downbeat
+  else if(d[0]===0xFB){ /* Continue: keep counting */ }
+  else if(d[0]===0xFC){ clk.ivl=0; }                            // Stop
+  else if(d[0]===0xF2&&d.length>=3){ clk.tick=((d[2]<<7)|d[1])*6-1; clk.pos=true; }   // Song Position
 }
+const clockRunning=()=>performance.now()-clk.seen<250;
+function scheduleFlush(){ clearTimeout(flushT); flushT=setTimeout(flushLive,40); }
+function flushLive(){
+  if(busy||!cur||!outP) return;
+  if(!changedIds().length){ armed=false; return; }
+  if(cfg.liveQ!=='now'&&clockRunning()&&clk.pos){ if(!armed){ armed=true; setStat('Live: change waiting for the next '+cfg.liveQ,'warn'); } return; }
+  liveSend();
+}
+function liveSend(){
+  armed=false; if(!cur||!outP) return;
+  const ch=changedIds(); if(!ch.length) return;
+  try{ const t0=performance.now();
+    ch.forEach((id,k)=>{ const v=out(id); writeControl(id,v,t0+k*GAP); dev[id]=v; });
+    setStat('Live: sent '+ch.length+' note(s)','ok'); log('Live sent '+ch.map(i=>noteName(out(i))).join(' '));
+  }catch(e){ setStat('Live send failed: '+e.message,'bad'); }
+  requestAnimationFrame(render);   // redraw off the MIDI callback
+}
+setInterval(()=>{ const e=$('clk'); if(!e) return;
+  if(!clockRunning()){ e.textContent='Impact clock: not running'; if(armed) liveSend(); return; }
+  const bpm=clk.ivl?Math.round(60000/(clk.ivl*24)):0;
+  e.textContent='Impact clock: '+(bpm?bpm+' BPM':'running')+(clk.pos?' · bar '+(Math.floor(clk.tick/96)+1)+'.'+(Math.floor(clk.tick%96/24)+1):' · bar position unknown, stop and restart the Impact to sync');
+},300);
 
 /* ---------- backups & presets ---------- */
 const jget=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))||d;}catch(e){return d;}};
@@ -291,19 +334,19 @@ function setNote(i,w,n){ const id=idOf(i,w); if(id==null) return; cur[id]=n;
 function eachPlain(fn){ INSTR.forEach((x,i)=>fn(i,x)); }
 function render(){
   $('root').value=cfg.root; $('scale').value=cfg.scale; $('lock').checked=cfg.lock; $('follow').checked=cfg.follow; $('live').checked=cfg.live; $('verify').checked=cfg.verify;
-  $('spreadBase').value=cfg.spreadBase; $('spreadStyle').value=cfg.spreadStyle;
+  $('spreadBase').value=cfg.spreadBase; $('spreadStyle').value=cfg.spreadStyle; $('liveQ').value=cfg.liveQ; $('muteNote').value=cfg.muteNote;
   $('empty').hidden=ready(); $('tbl').hidden=!ready();
-  const nChg=ready()?[...ALLOWED].filter(id=>cur[id]!==dev[id]).length:0;
+  const nChg=ready()?changedIds().length:0;
   $('send').disabled=!(ready()&&nChg>0&&!busy);
-  const cnt={}; if(ready()) [...ALLOWED].forEach(id=>cnt[cur[id]]=(cnt[cur[id]]||0)+1);
+  const cnt={}; if(ready()) [...ALLOWED].forEach(id=>{ if(!muted.has(id)) cnt[cur[id]]=(cnt[cur[id]]||0)+1; });
   const nDup=Object.values(cnt).filter(c=>c>1).length;
   $('pending').textContent=ready()?(nChg?nChg+' change(s) not sent yet':'No unsent changes')+(nDup?' · '+nDup+' note(s) used by more than one sound':''):'';
   if(ready()){
     const cell=(i,w)=>{ const id=idOf(i,w); if(id==null) return '<td class="small">—</td><td></td>';
-      const v=cur[id], chg=v!==dev[id], off=locked()&&!inScale(v), dup=cnt[v]>1;
+      const v=cur[id], m=muted.has(id), chg=out(id)!==dev[id], off=locked()&&!inScale(v), dup=!m&&cnt[v]>1;
       const isSel=sel.i===i&&sel.w===w;
-      return `<td class="cell ${isSel?'sel':''}" data-i="${i}" data-w="${w}"><span class="nn ${chg?'chg':''} ${off?'off':''} ${dup?'dup':''}">${noteName(v)}</span> <span class="small">${v}</span></td>
-        <td><button data-a="dn" data-i="${i}" data-w="${w}">▼</button><button data-a="up" data-i="${i}" data-w="${w}">▲</button><button data-a="odn" data-i="${i}" data-w="${w}">−12</button><button data-a="oup" data-i="${i}" data-w="${w}">+12</button></td>`; };
+      return `<td class="cell ${isSel?'sel':''}" data-i="${i}" data-w="${w}"><span class="nn ${chg?'chg':''} ${off?'off':''} ${dup?'dup':''} ${m?'mut':''}">${noteName(v)}</span> <span class="small">${v}</span></td>
+        <td><button data-a="dn" data-i="${i}" data-w="${w}">▼</button><button data-a="up" data-i="${i}" data-w="${w}">▲</button><button data-a="odn" data-i="${i}" data-w="${w}">−12</button><button data-a="oup" data-i="${i}" data-w="${w}">+12</button><button class="mute ${m?'on':''}" data-a="mute" data-i="${i}" data-w="${w}" title="Mute this send">M</button></td>`; };
     $('rows').innerHTML=INSTR.map((x,i)=>`<tr><td class="small">${i+1}</td><td>${x.name}</td>${cell(i,'plain')}${cell(i,'color')}</tr>`).join('');
   }
   drawKB(); try{localStorage.setItem(SKEY,JSON.stringify(cfg));}catch(e){}
@@ -318,7 +361,7 @@ function drawKB(){
   for(let n=LO;n<=HI;n++) if([1,3,6,8,10].includes(n%12)){ const x=xOf(n-1)+W-BW/2-.5; out+=`<rect data-n="${n}" x="${x}" y="0" width="${BW}" height="${BH}" rx="2" fill="${col(n,true)}"/>`; }
   if(ready()){
     const stack={};
-    INSTR.forEach((x,i)=>['plain','color'].forEach(w=>{ const id=x[w]; if(id==null) return; const n=cur[id]; if(n<LO||n>HI) return;
+    INSTR.forEach((x,i)=>['plain','color'].forEach(w=>{ const id=x[w]; if(id==null||muted.has(id)) return; const n=cur[id]; if(n<LO||n>HI) return;
       const black=[1,3,6,8,10].includes(n%12), cx=black?xOf(n-1)+W-.5:xOf(n)+(W-1)/2, k=stack[n]=(stack[n]||0)+1;
       const cy=(black?BH-12:H-26)-(k-1)*13, isSel=sel.i===i&&sel.w===w;
       const fill=isSel?'#4cc9f0':(w==='plain'?'#ff5d6c':'#b48cff');
@@ -339,12 +382,13 @@ function applyLock(){ if(!ready()) return; [...ALLOWED].forEach(id=>cur[id]=snap
 function init(){
   $('root').innerHTML=NAMES.map((n,i)=>`<option value="${i}">${n}</option>`).join('');
   $('scale').innerHTML=Object.keys(SCALES).map(k=>`<option>${k}</option>`).join('');
+  $('muteNote').innerHTML=[...Array(128).keys()].map(n=>`<option value="${n}">${noteName(n)} (${n})</option>`).join('');
   $('spreadBase').innerHTML=[...Array(HI-LO+1).keys()].map(i=>`<option value="${LO+i}">${noteName(LO+i)}</option>`).join('');
-  [['root',1],['scale',0],['lock',0],['follow',0],['verify',0],['spreadBase',1],['spreadStyle',0]].forEach(([k,num])=>$(k).addEventListener('change',e=>{
+  [['root',1],['scale',0],['lock',0],['follow',0],['verify',0],['spreadBase',1],['spreadStyle',0],['liveQ',0],['muteNote',1]].forEach(([k,num])=>$(k).addEventListener('change',e=>{
     const el=e.target; let v=el.type==='checkbox'?el.checked:el.value; if(num) v=+v; cfg[k]=v;
     if(k==='root'||k==='scale') scaleMap(); else if(k==='lock') applyLock(); render(); }));
   $('live').addEventListener('change',e=>{
-    if(e.target.checked&&ready()&&[...ALLOWED].some(id=>cur[id]!==dev[id])&&!confirm('Unsent changes will be sent to the Impact right now. Continue?')){ e.target.checked=false; return; }
+    if(e.target.checked&&ready()&&changedIds().length&&!confirm('Unsent changes will be sent to the Impact right now. Continue?')){ e.target.checked=false; return; }
     cfg.live=e.target.checked; render(); });
   $('connect').onclick=connect; $('readBtn').onclick=readAll; $('send').onclick=sendChanges;
   $('inSel').onchange=bind; $('outSel').onchange=bind;
@@ -352,7 +396,8 @@ function init(){
   $('rows').addEventListener('click',e=>{
     const b=e.target.closest('button'), td=e.target.closest('td.cell'), src=b||td; if(!src||!ready()) return;
     const i=+src.dataset.i, w=src.dataset.w; sel={i,w};
-    if(b){ const id=idOf(i,w), v=cur[id], a=b.dataset.a;
+    if(b&&b.dataset.a==='mute'){ const id=idOf(i,w); muted.has(id)?muted.delete(id):muted.add(id); }
+    else if(b){ const id=idOf(i,w), v=cur[id], a=b.dataset.a;
       let n=v; if(a==='up') n=step(v,1); if(a==='dn') n=step(v,-1); if(a==='oup') n=snap(v+12); if(a==='odn') n=snap(v-12);
       setNote(i,w,n); }
     render(); });
