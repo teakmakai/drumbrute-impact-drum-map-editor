@@ -29,6 +29,7 @@ td.cell.sel{background:#2f3346;box-shadow:inset 0 0 0 1px var(--acc)}
 .nn{display:inline-block;min-width:48px;text-align:center;font-weight:700;font-size:16px;color:var(--acc)}
 .nn.chg{color:var(--chg)}
 .nn.off{color:var(--bad)}
+.nn.dup{text-decoration:underline wavy var(--bad);text-underline-offset:4px}
 .small{font-size:11px;color:var(--dim)}
 .stat{font-size:12px;padding:3px 8px;border-radius:99px;background:var(--panel2);display:inline-block}
 .stat.ok{color:var(--ok)}.stat.bad{color:var(--bad)}.stat.warn{color:var(--chg)}
@@ -66,6 +67,7 @@ td.cell.sel{background:#2f3346;box-shadow:inset 0 0 0 1px var(--acc)}
   <div class="grid" style="margin-top:10px">
     <label class="f">Spread starts on<select id="spreadBase"></select></label>
     <label class="f">Spread style<select id="spreadStyle">
+      <option value="map">Scale map (Kick = root, no overlaps)</option>
       <option value="steps">Ascending scale steps</option>
       <option value="triad">Triad tones (1-3-5-8…)</option>
       <option value="fifths">Stacked 5ths of scale</option>
@@ -86,7 +88,7 @@ td.cell.sel{background:#2f3346;box-shadow:inset 0 0 0 1px var(--acc)}
     <thead><tr><th>#</th><th>Instrument</th><th>Note</th><th></th><th>Color-variant note</th><th></th></tr></thead>
     <tbody id="rows"></tbody>
   </table>
-  <div class="small" style="margin-top:6px">Click a note cell, then click a key below. Yellow = changed but not sent yet. Note names match MIDI Control Center (note 0 = C-2, so 60 = C3).</div>
+  <div class="small" style="margin-top:6px">Click a note cell, then click a key below. Choosing a root or scale lays out the scale automatically: Kick gets the root, the other pads climb the scale in order, and the color variants carry on up from there, so no two sounds share a note. Yellow = changed but not sent yet. Red wavy underline = note shared with another sound. Note names match MIDI Control Center (note 0 = C-2, so 60 = C3).</div>
 </div>
 
 <div class="panel">
@@ -145,7 +147,7 @@ const LO=24, HI=96;
 const SKEY='impact-editor-settings-v1', PKEY='impact-editor-presets-v1', BKEY='impact-editor-backups-v1';
 const $=id=>document.getElementById(id);
 
-let cfg={root:0,scale:'Minor (Aeolian)',lock:true,follow:false,live:false,verify:true,spreadBase:36,spreadStyle:'steps',inPort:'',outPort:''};
+let cfg={root:0,scale:'Minor (Aeolian)',lock:true,follow:false,live:false,verify:true,spreadBase:36,spreadStyle:'map',inPort:'',outPort:''};
 try{Object.assign(cfg,JSON.parse(localStorage.getItem(SKEY))||{});}catch(e){}
 const saveCfg=()=>{try{localStorage.setItem(SKEY,JSON.stringify(cfg));}catch(e){}};
 
@@ -293,12 +295,14 @@ function render(){
   $('empty').hidden=ready(); $('tbl').hidden=!ready();
   const nChg=ready()?[...ALLOWED].filter(id=>cur[id]!==dev[id]).length:0;
   $('send').disabled=!(ready()&&nChg>0&&!busy);
-  $('pending').textContent=ready()?(nChg?nChg+' change(s) not sent yet':'No unsent changes'):'';
+  const cnt={}; if(ready()) [...ALLOWED].forEach(id=>cnt[cur[id]]=(cnt[cur[id]]||0)+1);
+  const nDup=Object.values(cnt).filter(c=>c>1).length;
+  $('pending').textContent=ready()?(nChg?nChg+' change(s) not sent yet':'No unsent changes')+(nDup?' · '+nDup+' note(s) used by more than one sound':''):'';
   if(ready()){
     const cell=(i,w)=>{ const id=idOf(i,w); if(id==null) return '<td class="small">—</td><td></td>';
-      const v=cur[id], chg=v!==dev[id], off=locked()&&!inScale(v);
+      const v=cur[id], chg=v!==dev[id], off=locked()&&!inScale(v), dup=cnt[v]>1;
       const isSel=sel.i===i&&sel.w===w;
-      return `<td class="cell ${isSel?'sel':''}" data-i="${i}" data-w="${w}"><span class="nn ${chg?'chg':''} ${off?'off':''}">${noteName(v)}</span> <span class="small">${v}</span></td>
+      return `<td class="cell ${isSel?'sel':''}" data-i="${i}" data-w="${w}"><span class="nn ${chg?'chg':''} ${off?'off':''} ${dup?'dup':''}">${noteName(v)}</span> <span class="small">${v}</span></td>
         <td><button data-a="dn" data-i="${i}" data-w="${w}">▼</button><button data-a="up" data-i="${i}" data-w="${w}">▲</button><button data-a="odn" data-i="${i}" data-w="${w}">−12</button><button data-a="oup" data-i="${i}" data-w="${w}">+12</button></td>`; };
     $('rows').innerHTML=INSTR.map((x,i)=>`<tr><td class="small">${i+1}</td><td>${x.name}</td>${cell(i,'plain')}${cell(i,'color')}</tr>`).join('');
   }
@@ -322,6 +326,14 @@ function drawKB(){
   }
   const kb=$('kb'); kb.setAttribute('viewBox',`0 0 ${total} ${H}`); kb.innerHTML=out;
 }
+// Scale map: Kick = root, each later pad = next scale degree, then the color variants continue
+// up the scale after FM. All 19 notes are distinct, so no two sounds overlap.
+function scaleMap(){ if(!ready()) return; const iv=ivs();
+  let start=cfg.spreadBase+(((cfg.root-cfg.spreadBase)%12)+12)%12;   // root at or above "Spread starts on"
+  const slots=[...INSTR.map(x=>x.plain),...INSTR.filter(x=>x.color!=null).map(x=>x.color)];
+  const seq=k=>start+Math.floor(k/iv.length)*12+iv[k%iv.length];
+  while(seq(slots.length-1)>HI&&start-12>=LO) start-=12;
+  slots.forEach((id,k)=>cur[id]=seq(k)); }
 function applyLock(){ if(!ready()) return; [...ALLOWED].forEach(id=>cur[id]=snap(cur[id])); }
 
 function init(){
@@ -330,7 +342,7 @@ function init(){
   $('spreadBase').innerHTML=[...Array(HI-LO+1).keys()].map(i=>`<option value="${LO+i}">${noteName(LO+i)}</option>`).join('');
   [['root',1],['scale',0],['lock',0],['follow',0],['verify',0],['spreadBase',1],['spreadStyle',0]].forEach(([k,num])=>$(k).addEventListener('change',e=>{
     const el=e.target; let v=el.type==='checkbox'?el.checked:el.value; if(num) v=+v; cfg[k]=v;
-    if(['root','scale','lock'].includes(k)) applyLock(); render(); }));
+    if(k==='root'||k==='scale') scaleMap(); else if(k==='lock') applyLock(); render(); }));
   $('live').addEventListener('change',e=>{
     if(e.target.checked&&ready()&&[...ALLOWED].some(id=>cur[id]!==dev[id])&&!confirm('Unsent changes will be sent to the Impact right now. Continue?')){ e.target.checked=false; return; }
     cfg.live=e.target.checked; render(); });
@@ -347,7 +359,7 @@ function init(){
   $('kb').addEventListener('click',e=>{ const n=e.target.dataset&&e.target.dataset.n; if(!n||!ready()) return; setNote(sel.i,sel.w,snap(+n)); render(); });
 
   const all=fn=>()=>{ if(!ready()) return; fn(); render(); };
-  $('spread').onclick=all(()=>{ const p=pool(cfg.spreadBase,40), st=cfg.spreadStyle;
+  $('spread').onclick=all(()=>{ if(cfg.spreadStyle==='map'){ scaleMap(); return; } const p=pool(cfg.spreadBase,40), st=cfg.spreadStyle;
     eachPlain(i=>{ const n=st==='steps'?p[i]:st==='triad'?p[i*2]:p[(i*4)%p.length]; if(n!==undefined) setNote(i,'plain',snap(n)); }); });
   $('rand').onclick=all(()=>{ const p=pool(cfg.spreadBase,24); eachPlain(i=>setNote(i,'plain',p[Math.floor(Math.random()*p.length)])); });
   $('rev').onclick=all(()=>{ const v=INSTR.map(x=>cur[x.plain]).reverse(); eachPlain(i=>setNote(i,'plain',v[i])); });
